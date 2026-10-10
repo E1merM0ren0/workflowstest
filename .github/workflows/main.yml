@@ -1,0 +1,90 @@
+name: build thecodacus llama.cpp (Vulkan)
+
+# Clones github.com/thecodacus/llama.cpp, builds it with the Vulkan SDK on a
+# Windows runner, and uploads the binaries as an artifact.
+# Your local snapshot (tools/src/llama.cpp-thecodacus/llama.cpp-perf-b10818-27c54b4)
+# is this repo's `perf` branch at commit 27c54b4.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or commit of thecodacus/llama.cpp to build"
+        required: false
+        default: "perf"
+      sdk_version:
+        description: "Vulkan SDK version to install"
+        required: false
+        default: "1.4.363.0"
+  schedule:
+    # Weekly rebuild so the artifact tracks the tip of the fork's perf branch.
+    - cron: "0 5 * * 1"
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 150
+
+    steps:
+      - name: Fetch the fork
+        shell: pwsh
+        run: |
+          $ref = "${{ inputs.ref || 'perf' }}"
+          git clone --depth 1 --branch $ref --recurse-submodules `
+            https://github.com/thecodacus/llama.cpp.git thecodacus
+          cd thecodacus
+          $sha   = (git rev-parse HEAD).Trim()
+          $short = (git rev-parse --short HEAD).Trim()
+          $date  = (git log -1 --format=%cI).Trim()
+          "THE_SHORT=$short" >> $env:GITHUB_ENV
+          "THE_REF=$ref"     >> $env:GITHUB_ENV
+          "THE_SHA=$sha"     >> $env:GITHUB_ENV
+          Write-Host "ref=$ref sha=$short date=$date"
+          git log -1 --oneline
+          "repo=github.com/thecodacus/llama.cpp`nref=$ref`ncommit=$sha`ncommit_date=$date`nbuilt_by=github-actions`n" |
+            Out-File -Encoding utf8 "fork-info.txt"
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          $sdk = "${{ inputs.sdk_version || '1.4.363.0' }}"
+          choco install vulkan-sdk --version=$sdk -y --no-progress
+          "VULKAN_SDK=C:\VulkanSDK\$sdk" >> $env:GITHUB_ENV
+
+      - name: Configure (MSVC + Ninja + Vulkan)
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" || call "%ProgramFiles%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" || call "%ProgramFiles%\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -S thecodacus -B build/thecodacus -G Ninja ^
+                -DGGML_VULKAN=ON ^
+                -DCMAKE_BUILD_TYPE=Release ^
+                -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF ^
+                -DVulkan_INCLUDE_DIR=%VULKAN_SDK%/Include ^
+                -DVulkan_LIBRARY=%VULKAN_SDK%/Lib/vulkan-1.lib ^
+                -DCMAKE_PREFIX_PATH=%VULKAN_SDK%/Lib/cmake
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" || call "%ProgramFiles%\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" || call "%ProgramFiles%\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build "build/thecodacus" -j 4 --target llama-cli llama-server
+
+      - name: Collect binaries
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Copy-Item build/thecodacus/bin/*.exe out/ -ErrorAction SilentlyContinue
+          Copy-Item build/thecodacus/bin/*.dll out/ -ErrorAction SilentlyContinue
+          Copy-Item thecodacus/fork-info.txt out/ -ErrorAction SilentlyContinue
+          Get-ChildItem out | Select-Object Name, Length
+
+      - name: Sanity check
+        shell: cmd
+        run: out\llama-cli.exe --version
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: thecodacus-llama-vulkan-${{ env.THE_SHORT }}
+          path: out/
+          retention-days: 30
