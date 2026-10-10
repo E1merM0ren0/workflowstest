@@ -13,9 +13,9 @@ on:
         required: false
         default: "perf"
       sdk_version:
-        description: "Vulkan SDK version to install"
+        description: "Vulkan SDK version to install (Chocolatey package version)"
         required: false
-        default: "1.4.363.0"
+        default: "1.4.363"
   schedule:
     # Weekly rebuild so the artifact tracks the tip of the fork's perf branch.
     - cron: "0 5 * * 1"
@@ -47,9 +47,15 @@ jobs:
       - name: Install Vulkan SDK
         shell: pwsh
         run: |
-          $sdk = "${{ inputs.sdk_version || '1.4.363.0' }}"
+          # NB: the Chocolatey package version (1.4.363) differs from the
+          # installer folder it creates (1.4.363.0), so detect the folder.
+          $sdk = "${{ inputs.sdk_version || '1.4.363' }}"
           choco install vulkan-sdk --version=$sdk -y --no-progress
-          "VULKAN_SDK=C:\VulkanSDK\$sdk" >> $env:GITHUB_ENV
+          $dir = Get-ChildItem C:\VulkanSDK -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $dir) { throw "Vulkan SDK directory not found under C:\VulkanSDK" }
+          Write-Host "Vulkan SDK at $($dir.FullName)"
+          if (-not (Test-Path "$($dir.FullName)\Include\vulkan\vulkan.h")) { throw "vulkan.h missing - SDK install incomplete" }
+          "VULKAN_SDK=$($dir.FullName)" >> $env:GITHUB_ENV
 
       - name: Configure (MSVC + Ninja + Vulkan)
         shell: cmd
