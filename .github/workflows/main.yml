@@ -38,14 +38,35 @@ jobs:
           "repo=github.com/thecodacus/llama.cpp`nref=$ref`ncommit=$sha`ncommit_date=$date`nbuilt_by=github-actions`n" |
             Out-File -Encoding utf8 "fork-info.txt"
 
-      - name: Apply flash‑attn shader patch
+     
+      - name: Apply flash-attn shader patch
         shell: pwsh
         run: |
-          cd thecodacus
-          $patch = Join-Path $Env:GITHUB_WORKSPACE ".github/patches/flash_attn_fix.patch"
-          if (-not (Test-Path $patch)) { throw "Patch file not found: $patch" }
-          git apply $patch
-          Write-Host "✅ Patch applied"
+          $patch = Join-Path $env:GITHUB_WORKSPACE ".github/patches/flash_attn_fix.patch"
+
+          if (-not (Test-Path $patch)) {
+            Write-Host "Patch not found; skipping optional patch."
+            exit 0
+          }
+
+          Push-Location thecodacus
+          try {
+            git apply --check $patch
+            if ($LASTEXITCODE -ne 0) {
+              throw "Patch does not apply cleanly."
+            }
+
+            git apply $patch
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to apply patch."
+            }
+
+            Write-Host "Patch applied successfully."
+          }
+          finally {
+            Pop-Location
+          }
+
 
       - name: Install Vulkan SDK
         shell: pwsh
