@@ -14,13 +14,17 @@ on:
   schedule:
     - cron: "0 5 * * 1"
 
+# 👇 REQUIRED: Grants the workflow permission to create releases/push to the repo
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-2022
     timeout-minutes: 150
 
     steps:
-      # 👇 ADD THIS STEP to checkout the current repository so the patch file is available
+      # 👇 REQUIRED: Checks out YOUR repo so the patch file is available
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -46,7 +50,6 @@ jobs:
         shell: pwsh
         run: |
           cd thecodacus
-          # Now that actions/checkout is used, $Env:GITHUB_WORKSPACE contains the .github folder
           $patch = Join-Path $Env:GITHUB_WORKSPACE ".github/patches/flash_attn_fix.patch"
           if (-not (Test-Path $patch)) { throw "Patch file not found: $patch" }
           git apply $patch
@@ -115,9 +118,23 @@ jobs:
         shell: cmd
         run: out\llama-cli.exe --version
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      # 👇 REPLACED: Publishes binaries permanently to GitHub Releases
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
         with:
-          name: thecodacus-llama-vulkan-${{ env.THE_SHORT }}
-          path: out/
-          retention-days: 30
+          files: |
+            out/*.exe
+            out/*.dll
+            out/fork-info.txt
+          tag_name: thecodacus-vulkan-${{ env.THE_SHORT }}
+          name: Vulkan Build ${{ env.THE_SHORT }}
+          body: |
+            Automated Vulkan build of thecodacus/llama.cpp.
+            
+            - **Source Commit:** `${{ env.THE_SHA }}`
+            - **Branch/Ref:** `${{ env.THE_REF }}`
+            - **Built by:** GitHub Actions
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
