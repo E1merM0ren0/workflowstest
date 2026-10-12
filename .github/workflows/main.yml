@@ -1,66 +1,60 @@
-
-
 name: Build llama.cpp with Vulkan
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - .github/workflows/build-vulkan.yml
 
 permissions:
   contents: read
 
 jobs:
-  linux:
-    runs-on: ubuntu-24.04
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: linux
+          - os: windows-latest
+            artifact: windows
+    runs-on: ${{ matrix.os }}
+
     steps:
-      - name: Install dependencies
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build libvulkan-dev glslc spirv-headers
-      - name: Clone repository
-        run: git clone --depth 1 https://github.com/thecodacus/llama.cpp.git source
-      - name: Configure
-        run: cmake -S source -B source/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON
-      - name: Compile
-        run: cmake --build source/build --parallel 2
-      - name: Package
-        run: tar -czf llama.cpp-linux-vulkan-x64.tar.gz -C source/build bin
-      - uses: actions/upload-artifact@v4
+          sudo apt-get install -y build-essential cmake ninja-build libvulkan-dev glslc spirv-headers libssl-dev
+
+      - name: Install Vulkan SDK on Windows
+        if: runner.os == 'Windows'
+        uses: jakoch/install-vulkan-sdk-action@v1.7.0
         with:
-          name: llama.cpp-linux-vulkan-x64
-          path: llama.cpp-linux-vulkan-x64.tar.gz
+          cache: true
+          stripdown: true
+
+      - name: Clone source repository
+        run: git clone --depth 1 https://github.com/thecodacus/llama.cpp.git llama.cpp
+
+      - name: Configure Linux build
+        if: runner.os == 'Linux'
+        run: cmake -S llama.cpp -B llama.cpp/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON
+
+      - name: Configure Windows build
+        if: runner.os == 'Windows'
+        run: cmake -S llama.cpp -B llama.cpp/build -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON
+
+      - name: Compile Linux
+        if: runner.os == 'Linux'
+        run: cmake --build llama.cpp/build --parallel 2
+
+      - name: Compile Windows
+        if: runner.os == 'Windows'
+        run: cmake --build llama.cpp/build --config Release --parallel 2
+
+      - name: Upload compiled binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-cpp-vulkan-${{ matrix.artifact }}
+          path: llama.cpp/build/bin/**
           if-no-files-found: error
 
-  windows:
-    runs-on: windows-2022
-    steps:
-      - name: Install Vulkan SDK
-        shell: pwsh
-        run: |
-          $version = (Invoke-RestMethod "https://vulkan.lunarg.com/sdk/latest/windows.txt").Trim()
-          $installer = "$env:RUNNER_TEMP\VulkanSDK-Installer.exe"
-          $url = "https://sdk.lunarg.com/sdk/download/$version/windows/vulkansdk-windows-X64-$version.exe"
-          Invoke-WebRequest -Uri $url -OutFile $installer
-          & $installer --accept-licenses --default-answer --confirm-command install
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$version"
-          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$version\Bin"
-      - name: Clone repository
-        shell: pwsh
-        run: git clone --depth 1 https://github.com/thecodacus/llama.cpp.git source
-      - name: Configure
-        shell: pwsh
-        run: cmake -S source -B source/build -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON
-      - name: Compile
-        shell: pwsh
-        run: cmake --build source/build --config Release --parallel 2
-      - name: Package
-        shell: pwsh
-        run: Compress-Archive -Path source/build/bin -DestinationPath llama.cpp-windows-vulkan-x64.zip -Force
-      - uses: actions/upload-artifact@v4
-        with:
-          name: llama.cpp-windows-vulkan-x64
-          path: llama.cpp-windows-vulkan-x64.zip
-          if-no-files-found: error
