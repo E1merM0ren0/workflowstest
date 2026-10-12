@@ -1,4 +1,4 @@
-name: build thecodacus llama.cpp (Vulkan) 
+name: build thecodacus llama.cpp (Vulkan)
 
 on:
   workflow_dispatch:
@@ -20,6 +20,10 @@ jobs:
     timeout-minutes: 150
 
     steps:
+      # 👇 ADD THIS STEP to checkout the current repository so the patch file is available
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Fetch the fork
         shell: pwsh
         run: |
@@ -38,35 +42,15 @@ jobs:
           "repo=github.com/thecodacus/llama.cpp`nref=$ref`ncommit=$sha`ncommit_date=$date`nbuilt_by=github-actions`n" |
             Out-File -Encoding utf8 "fork-info.txt"
 
-     
       - name: Apply flash-attn shader patch
         shell: pwsh
         run: |
-          $patch = Join-Path $env:GITHUB_WORKSPACE ".github/patches/flash_attn_fix.patch"
-
-          if (-not (Test-Path $patch)) {
-            Write-Host "Patch not found; skipping optional patch."
-            exit 0
-          }
-
-          Push-Location thecodacus
-          try {
-            git apply --check $patch
-            if ($LASTEXITCODE -ne 0) {
-              throw "Patch does not apply cleanly."
-            }
-
-            git apply $patch
-            if ($LASTEXITCODE -ne 0) {
-              throw "Failed to apply patch."
-            }
-
-            Write-Host "Patch applied successfully."
-          }
-          finally {
-            Pop-Location
-          }
-
+          cd thecodacus
+          # Now that actions/checkout is used, $Env:GITHUB_WORKSPACE contains the .github folder
+          $patch = Join-Path $Env:GITHUB_WORKSPACE ".github/patches/flash_attn_fix.patch"
+          if (-not (Test-Path $patch)) { throw "Patch file not found: $patch" }
+          git apply $patch
+          Write-Host "✅ Patch applied"
 
       - name: Install Vulkan SDK
         shell: pwsh
