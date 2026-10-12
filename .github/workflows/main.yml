@@ -1,4 +1,4 @@
-name: build thecodacus llama.cpp (Vulkan)
+name: build thecodacus llama.cpp (Vulkan) 
 
 on:
   workflow_dispatch:
