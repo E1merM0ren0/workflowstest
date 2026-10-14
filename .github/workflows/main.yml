@@ -1,157 +1,69 @@
-name: Build thecodacus llama.cpp with Vulkan
+name: Build llama.cpp with Vulkan
 
 on:
-  workflow_dispatch:
   push:
-    paths:
-      - .github/workflows/build-vulkan.yml
-      - .github/workflows/build-vulkan-fixed.yml
-
-permissions:
-  contents: read
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # Allows you to run the workflow manually from the Actions tab
 
 jobs:
-  linux:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 360
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
     steps:
-      - name: Install dependencies
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Explicitly targeting the requested fork
+          repository: thecodacus/llama.cpp 
+          submodules: recursive
+
+      # --- LINUX SETUP ---
+      - name: Install Vulkan & Build Tools (Linux)
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build libvulkan-dev glslc spirv-headers python3
-      - name: Clone repository
-        run: git clone --depth 1 --branch perf https://github.com/thecodacus/llama.cpp.git source
-      - name: Patch duplicate Vulkan shader definitions
+          sudo apt-get install -y build-essential cmake libvulkan-dev vulkan-tools glslang-tools
+
+      # --- WINDOWS SETUP ---
+      - name: Install Vulkan SDK (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
+          # Install Vulkan SDK via Chocolatey
+          choco install vulkan-sdk -y
+          
+          # Refresh environment variables so CMake can immediately find the Vulkan SDK
+          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+          echo "VULKAN_SDK=$env:VULKAN_SDK" >> $env:GITHUB_ENV
 
-          root = Path("source/ggml/src/ggml-vulkan/vulkan-shaders")
-          fa_types_path = root / "fa_types.glsl"
-          fa_types = fa_types_path.read_text()
+      # --- COMPILATION ---
+      - name: Configure CMake
+        shell: bash
+        run: |
+          # GGML_VULKAN=ON enables the Vulkan GPU backend
+          cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
 
-          # Keep type constants here; the extended helper implementations live in flash_attn_base.glsl.
-          start_marker = "// Number of matrix elements per buffer block"
-          end_marker = "bool fa_type_needs_shmem("
-          start = fa_types.find(start_marker)
-          end = fa_types.find(end_marker, start)
-          if start < 0 or end < 0:
-              raise SystemExit("Expected duplicate helper block was not found in fa_types.glsl")
-          fa_types = fa_types[:start] + fa_types[end:]
+      - name: Build Project
+        shell: bash
+        run: |
+          # Compile using all available cores
+          cmake --build build --config Release --parallel
 
-          if "#define FA_TYPE_Q1_0 41u" not in fa_types:
-              marker = "#define FA_TYPE_BF16 30u"
-              if marker not in fa_types:
-                  raise SystemExit("Could not find FA_TYPE_BF16 insertion point")
-              fa_types = fa_types.replace(marker, marker + "\n#define FA_TYPE_Q1_0 41u", 1)
-          fa_types_path.write_text(fa_types)
-
-          base_path = root / "flash_attn_base.glsl"
-          base = base_path.read_text()
-          marker = "case FA_TYPE_Q8_0: return uint(QUANT_K_Q8_0);"
-          if "case FA_TYPE_IQ4_NL:" not in base:
-              if marker not in base:
-                  raise SystemExit("Could not find flash-attention block-size insertion point")
-              base = base.replace(marker, marker + "\n        case FA_TYPE_IQ4_NL: return uint(QUANT_K_IQ4_NL);", 1)
-          base_path.write_text(base)
-
-          types_path = root / "types.glsl"
-          types = types_path.read_text()
-          for tier in ("TURBO2_0", "TURBO3_0", "TURBO4_0"):
-              old = f"#if defined(DATA_A_{tier})\n#define QUANT_K QUANT_K_{tier}"
-              new = (f"#if defined(DATA_A_{tier}) && !defined(DATA_A_IQ4_NL) "
-                     f"&& !defined(DATA_A_IQ4_XS)\n#define QUANT_K QUANT_K_{tier}")
-              if old not in types:
-                  raise SystemExit(f"Could not find macro-conflict fix location for {tier}")
-              types = types.replace(old, new, 1)
-          types_path.write_text(types)
-          print("Applied build-time fixes for the logged Vulkan shader errors.")
-          PY
-      - name: Configure
-        run: cmake -S source -B source/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON
-      - name: Compile
-        run: cmake --build source/build --parallel "$(nproc)"
-      - name: Package
-        run: tar -czf llama.cpp-linux-vulkan-x64.tar.gz -C source/build bin
-      - uses: actions/upload-artifact@v4
+      # --- ARTIFACTS ---
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: llama.cpp-linux-vulkan-x64
-          path: llama.cpp-linux-vulkan-x64.tar.gz
-          if-no-files-found: error
-
-  windows:
-    runs-on: windows-2022
-    timeout-minutes: 360
-    steps:
-      - name: Install Vulkan SDK
-        shell: pwsh
-        run: |
-          $version = (Invoke-RestMethod "https://vulkan.lunarg.com/sdk/latest/windows.txt").Trim()
-          $installer = "$env:RUNNER_TEMP\VulkanSDK-Installer.exe"
-          $url = "https://sdk.lunarg.com/sdk/download/$version/windows/vulkansdk-windows-X64-$version.exe"
-          Invoke-WebRequest -Uri $url -OutFile $installer
-          & $installer --accept-licenses --default-answer --confirm-command install
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\$version"
-          Add-Content $env:GITHUB_PATH "C:\VulkanSDK\$version\Bin"
-      - name: Clone repository
-        shell: pwsh
-        run: git clone --depth 1 --branch perf https://github.com/thecodacus/llama.cpp.git source
-      - name: Patch duplicate Vulkan shader definitions
-        shell: pwsh
-        run: |
-          @'
-          from pathlib import Path
-
-          root = Path("source/ggml/src/ggml-vulkan/vulkan-shaders")
-          fa_types_path = root / "fa_types.glsl"
-          fa_types = fa_types_path.read_text()
-          start_marker = "// Number of matrix elements per buffer block"
-          end_marker = "bool fa_type_needs_shmem("
-          start = fa_types.find(start_marker)
-          end = fa_types.find(end_marker, start)
-          if start < 0 or end < 0:
-              raise SystemExit("Expected duplicate helper block was not found in fa_types.glsl")
-          fa_types = fa_types[:start] + fa_types[end:]
-          if "#define FA_TYPE_Q1_0 41u" not in fa_types:
-              marker = "#define FA_TYPE_BF16 30u"
-              if marker not in fa_types:
-                  raise SystemExit("Could not find FA_TYPE_BF16 insertion point")
-              fa_types = fa_types.replace(marker, marker + "\n#define FA_TYPE_Q1_0 41u", 1)
-          fa_types_path.write_text(fa_types)
-
-          base_path = root / "flash_attn_base.glsl"
-          base = base_path.read_text()
-          marker = "case FA_TYPE_Q8_0: return uint(QUANT_K_Q8_0);"
-          if "case FA_TYPE_IQ4_NL:" not in base:
-              if marker not in base:
-                  raise SystemExit("Could not find flash-attention block-size insertion point")
-              base = base.replace(marker, marker + "\n        case FA_TYPE_IQ4_NL: return uint(QUANT_K_IQ4_NL);", 1)
-          base_path.write_text(base)
-
-          types_path = root / "types.glsl"
-          types = types_path.read_text()
-          for tier in ("TURBO2_0", "TURBO3_0", "TURBO4_0"):
-              old = f"#if defined(DATA_A_{tier})\n#define QUANT_K QUANT_K_{tier}"
-              new = (f"#if defined(DATA_A_{tier}) && !defined(DATA_A_IQ4_NL) "
-                     f"&& !defined(DATA_A_IQ4_XS)\n#define QUANT_K QUANT_K_{tier}")
-              if old not in types:
-                  raise SystemExit(f"Could not find macro-conflict fix location for {tier}")
-              types = types.replace(old, new, 1)
-          types_path.write_text(types)
-          print("Applied build-time fixes for the logged Vulkan shader errors.")
-          '@ | python -
-      - name: Configure
-        shell: pwsh
-        run: cmake -S source -B source/build -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON
-      - name: Compile
-        shell: pwsh
-        run: cmake --build source/build --config Release --parallel 4
-      - name: Package
-        shell: pwsh
-        run: Compress-Archive -Path source/build/bin -DestinationPath llama.cpp-windows-vulkan-x64.zip -Force
-      - uses: actions/upload-artifact@v4
-        with:
-          name: llama.cpp-windows-vulkan-x64
-          path: llama.cpp-windows-vulkan-x64.zip
-          if-no-files-found: error
+          name: llama-cpp-vulkan-${{ matrix.os }}
+          # Paths vary slightly between single-config (Linux) and multi-config (Windows) CMake generators
+          path: |
+            build/bin/
+            build/bin/Release/
+            build/Release/
+          if-no-files-found: warn
