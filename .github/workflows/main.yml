@@ -1,69 +1,128 @@
-name: Build llama.cpp with Vulkan
+name: Build llama.cpp with Vulkan Support
 
 on:
+  workflow_dispatch:
   push:
-    branches: [ "main", "master" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch: # Allows you to run the workflow manually from the Actions tab
+    branches: [ main ]
 
 jobs:
-  build:
-    name: Build on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-
+  build-windows:
+    runs-on: windows-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          # Explicitly targeting the requested fork
-          repository: thecodacus/llama.cpp 
+          repository: thecodacus/llama.cpp
+          path: llama.cpp
+          token: ${{ secrets.GITHUB_TOKEN }} # If the repository is private
           submodules: recursive
 
-      # --- LINUX SETUP ---
-      - name: Install Vulkan & Build Tools (Linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Setup Vulkan SDK
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake libvulkan-dev vulkan-tools glslang-tools
-
-      # --- WINDOWS SETUP ---
-      - name: Install Vulkan SDK (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          # Install Vulkan SDK via Chocolatey
-          choco install vulkan-sdk -y
+          # Download and install Vulkan SDK
+          $vulkanSdkUrl = "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe"
+          $installerPath = "$env:TEMP\vulkan-sdk.exe"
           
-          # Refresh environment variables so CMake can immediately find the Vulkan SDK
-          $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-          echo "VULKAN_SDK=$env:VULKAN_SDK" >> $env:GITHUB_ENV
+          Write-Host "Downloading Vulkan SDK..."
+          Invoke-WebRequest -Uri $vulkanSdkUrl -OutFile $installerPath
+          
+          Write-Host "Installing Vulkan SDK..."
+          Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait
+          
+          # Add Vulkan SDK to PATH
+          $vulkanPath = "C:\VulkanSDK\*"
+          $env:VULKAN_SDK = (Get-ChildItem $vulkanPath | Select-Object -First 1).FullName
+          $env:Path += ";$env:VULKAN_SDK\Bin"
+          
+          Write-Host "Vulkan SDK installed at: $env:VULKAN_SDK"
 
-      # --- COMPILATION ---
       - name: Configure CMake
-        shell: bash
         run: |
-          # GGML_VULKAN=ON enables the Vulkan GPU backend
-          cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
+          cd llama.cpp
+          cmake -B build -S . -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
 
       - name: Build Project
-        shell: bash
         run: |
-          # Compile using all available cores
-          cmake --build build --config Release --parallel
+          cd llama.cpp
+          cmake --build build --config Release --parallel 4
 
-      # --- ARTIFACTS ---
-      - name: Upload Build Artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: llama-cpp-vulkan-${{ matrix.os }}
-          # Paths vary slightly between single-config (Linux) and multi-config (Windows) CMake generators
+          name: llama-cpp-windows-vulkan
           path: |
-            build/bin/
-            build/bin/Release/
-            build/Release/
-          if-no-files-found: warn
+            llama.cpp/build/bin/Release/*.exe
+            llama.cpp/build/bin/Release/*.dll
+          retention-days: 7
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          repository: thecodacus/llama.cpp
+          path: llama.cpp
+          token: ${{ secrets.GITHUB_TOKEN }} # If the repository is private
+          submodules: recursive
+
+      - name: Install Vulkan Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            vulkan-tools \
+            vulkan-validationlayers \
+            spirv-tools \
+            libvulkan-dev
+
+      - name: Configure CMake
+        run: |
+          cd llama.cpp
+          cmake -B build -S . -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build Project
+        run: |
+          cd llama.cpp
+          cmake --build build --parallel 4
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-cpp-linux-vulkan
+          path: |
+            llama.cpp/build/bin/*
+            llama.cpp/build/lib/*
+          retention-days: 7
+
+  build-summary:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display Build Summary
+        run: |
+          echo "## Build Summary 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "### Successfully built llama.cpp with Vulkan support for Windows and Linux" >> $GITHUB_STEP_SUM
+          echo "" >> $GITHUB_STEP_SUM
+          echo "**Build Time:** $(date)" >> $GITHUB_STEP_SUM
+          echo "" >> $GITHUB_STEP_SUM
+          
+          if [ -d "artifacts/llama-cpp-windows-vulkan" ]; then
+            echo "### Windows Build Artifacts:" >> $GITHUB_STEP_SUM
+            echo "```" >> $GITHUB_STEP_SUM
+            ls -la artifacts/llama-cpp-windows-vulkan >> $GITHUB_STEP_SUM
+            echo "```" >> $GITHUB_STEP_SUM
+          fi
+          
+          if [ -d "artifacts/llama-cpp-linux-vulkan" ]; then
+            echo "### Linux Build Artifacts:" >> $GITHUB_STEP_SUM
+            echo "```" >> $GITHUB_STEP_SUM
+            ls -la artifacts/llama-cpp-linux-vulkan >> $GITHUB_STEP_SUM
+            echo "```" >> $GITHUB_STEP_SUM
+          fi
