@@ -57,6 +57,20 @@ jobs:
             llama.cpp/build/bin/Release/*.dll
           retention-days: 7
 
+#==========================================================================
+#==========================================================================
+#==========================================================================
+#==========================================================================
+#==========================================================================
+#==========================================================================
+#==========================================================================
+#==========================================================================
+#==========================================================================
+#==========================================================================
+#==========================================================================
+#==========================================================================
+#==========================================================================
+#==========================================================================
   build-linux:
     runs-on: ubuntu-latest
     steps:
@@ -68,27 +82,30 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           submodules: recursive
 
-   
       - name: Install Vulkan Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            build-essential \
+            cmake \
             vulkan-tools \
             vulkan-validationlayers \
             spirv-tools \
+            spirv-headers \
             libvulkan-dev \
             glslc
-
 
       - name: Configure CMake
         run: |
           cd llama.cpp
-          cmake -B build -S . -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -S . \
+            -DGGML_VULKAN=ON \
+            -DCMAKE_BUILD_TYPE=Release
 
       - name: Build Project
         run: |
           cd llama.cpp
-          cmake --build build --parallel 4
+          cmake --build build --config Release --parallel 4
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
@@ -97,35 +114,6 @@ jobs:
           path: |
             llama.cpp/build/bin/*
             llama.cpp/build/lib/*
+          if-no-files-found: error
           retention-days: 7
-
-  build-summary:
-    needs: [build-windows, build-linux]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Display Build Summary
-        run: |
-          echo "## Build Summary 🚀" >> $GITHUB_STEP_SUMMARY
-          echo "### Successfully built llama.cpp with Vulkan support for Windows and Linux" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Build Time:** $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ -d "artifacts/llama-cpp-windows-vulkan" ]; then
-            echo "### Windows Build Artifacts:" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            ls -la artifacts/llama-cpp-windows-vulkan >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ -d "artifacts/llama-cpp-linux-vulkan" ]; then
-            echo "### Linux Build Artifacts:" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            ls -la artifacts/llama-cpp-linux-vulkan >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          fi
+```
