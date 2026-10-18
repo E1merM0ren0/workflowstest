@@ -1,35 +1,49 @@
+
 name: Build llama.cpp with Vulkan Support
+
+# ============================================================
+# Shared configuration
+# Change the repository and ref here only.
+# ============================================================
+env:
+  LLAMA_CPP_REPOSITORY: ggml-org/llama.cpp
+  LLAMA_CPP_REF: master
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
+    tags:
+      - 'v*'
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
+
+  # ============================================================
+  # WINDOWS BUILD
+  # ============================================================
   build-windows:
+    name: Build Windows Vulkan
     runs-on: windows-latest
+
     steps:
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
         with:
-          # Original fork — keep this for the intended build
-          # repository: thecodacus/llama.cpp
-          # Test with upstream instead
-          repository: ggml-org/llama.cpp
-          ref: master
+          repository: ${{ env.LLAMA_CPP_REPOSITORY }}
+          ref: ${{ env.LLAMA_CPP_REF }}
           path: llama.cpp
           submodules: recursive
 
-          
       - name: Setup Vulkan SDK
         shell: pwsh
         timeout-minutes: 20
         run: |
           $ErrorActionPreference = "Stop"
 
-          # Pin the SDK version so the installation path is predictable.
           $ver = "1.4.313.2"
           $installerPath = "$env:RUNNER_TEMP\VulkanSDK-Installer.exe"
           $url = "https://sdk.lunarg.com/sdk/download/$ver/windows/vulkan-sdk.exe"
@@ -60,50 +74,80 @@ jobs:
           Write-Host "Vulkan SDK installed successfully at $sdkPath"
 
       - name: Configure CMake
+        shell: pwsh
         run: |
-          cd llama.cpp
-          cmake -B build -S . -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release
+          cmake -S llama.cpp -B llama.cpp/build `
+            -DGGML_VULKAN=ON `
+            -DCMAKE_BUILD_TYPE=Release
 
       - name: Build Project
         run: |
-          cd llama.cpp
-          cmake --build build --config Release --parallel 4
+          cmake --build llama.cpp/build --config Release --parallel 4
 
-      - name: Upload Artifacts
+      - name: Package Windows Release
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $buildDir = "llama.cpp/build/bin/Release"
+
+          # Some CMake generators place binaries directly in build/bin.
+          if (-not (Test-Path $buildDir)) {
+            $buildDir = "llama.cpp/build/bin"
+          }
+
+          if (-not (Test-Path $buildDir)) {
+            throw "Build output directory was not found."
+          }
+
+          $files = Get-ChildItem $buildDir -File -Recurse |
+            Where-Object { $_.Extension -in @(".exe", ".dll") }
+
+          if (-not $files) {
+            throw "No Windows executables or DLLs were found."
+          }
+
+          $stageDir = "windows-release-stage"
+          New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+
+          foreach ($file in $files) {
+            $relativePath = $file.FullName.Substring(
+              (Resolve-Path $buildDir).Path.Length
+            ).TrimStart('\', '/')
+
+            $destination = Join-Path $stageDir $relativePath
+            $destinationDir = Split-Path $destination -Parent
+
+            New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
+            Copy-Item $file.FullName $destination -Force
+          }
+
+          Compress-Archive `
+            -Path "$stageDir\*" `
+            -DestinationPath "llama-cpp-windows-vulkan.zip" `
+            -Force
+
+      - name: Upload Windows Release Package
         uses: actions/upload-artifact@v4
         with:
           name: llama-cpp-windows-vulkan
-          path: |
-            llama.cpp/build/bin/Release/*.exe
-            llama.cpp/build/bin/Release/*.dll
+          path: llama-cpp-windows-vulkan.zip
+          if-no-files-found: error
           retention-days: 7
 
-#==========================================================================
-#==========================================================================
-#==========================================================================
-#==========================================================================
-#==========================================================================
-#==========================================================================
-#==========================================================================
-#==========================================================================
-#==========================================================================
-#==========================================================================
-#==========================================================================
-#==========================================================================
-#==========================================================================
-#==========================================================================
-
+  # ============================================================
+  # LINUX BUILD
+  # ============================================================
   build-linux:
+    name: Build Linux Vulkan
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
         with:
-          # Original fork — restore this line to test your intended source:
-          # repository: thecodacus/llama.cpp
-          # Test — use upstream llama.cpp:
-          repository: ggml-org/llama.cpp
-          ref: master
+          repository: ${{ env.LLAMA_CPP_REPOSITORY }}
+          ref: ${{ env.LLAMA_CPP_REF }}
           path: llama.cpp
           submodules: recursive
 
@@ -155,12 +199,67 @@ jobs:
         run: |
           cmake --build build --parallel 4
 
-      - name: Upload Artifacts
+      - name: Package Linux Release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p release-stage
+
+          if [ -d llama.cpp/build/bin ]; then
+            cp -a llama.cpp/build/bin release-stage/
+          fi
+
+          if [ -d llama.cpp/build/lib ]; then
+            cp -a llama.cpp/build/lib release-stage/
+          fi
+
+          if [ -z "$(find release-stage -type f -print -quit)" ]; then
+            echo "::error::No Linux build output files were found."
+            exit 1
+          fi
+
+          tar -czf llama-cpp-linux-vulkan.tar.gz -C release-stage .
+
+      - name: Upload Linux Release Package
         uses: actions/upload-artifact@v4
         with:
           name: llama-cpp-linux-vulkan
-          path: |
-            llama.cpp/build/bin/*
-            llama.cpp/build/lib/*
+          path: llama-cpp-linux-vulkan.tar.gz
           if-no-files-found: error
           retention-days: 7
+
+  # ============================================================
+  # GITHUB RELEASE
+  # Runs only when a version tag (v*) is pushed.
+  # ============================================================
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+
+    needs:
+      - build-windows
+      - build-linux
+
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Build Packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: llama-cpp-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: llama.cpp Vulkan Build ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            release-assets/llama-cpp-linux-vulkan.tar.gz
+            release-assets/llama-cpp-windows-vulkan.zip
