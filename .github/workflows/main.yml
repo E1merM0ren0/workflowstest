@@ -96,12 +96,15 @@ jobs:
   build-linux:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout llama.cpp
         uses: actions/checkout@v4
         with:
-          repository: thecodacus/llama.cpp
+          # Original fork — restore this line to test your intended source:
+          # repository: thecodacus/llama.cpp
+          # Test — use upstream llama.cpp:
+          repository: ggml-org/llama.cpp
+          ref: master
           path: llama.cpp
-          token: ${{ secrets.GITHUB_TOKEN }}
           submodules: recursive
 
       - name: Install Vulkan Dependencies
