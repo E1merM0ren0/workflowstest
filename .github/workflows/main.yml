@@ -18,25 +18,41 @@ jobs:
           path: llama.cpp
           token: ${{ secrets.GITHUB_TOKEN }}
           submodules: recursive
-
       - name: Setup Vulkan SDK
+        shell: pwsh
+        timeout-minutes: 20
         run: |
-          $vulkanSdkUrl = "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe"
-          $installerPath = "$env:TEMP\vulkan-sdk.exe"
-          
-          Write-Host "Downloading Vulkan SDK..."
-          Invoke-WebRequest -Uri $vulkanSdkUrl -OutFile $installerPath
-          
-          Write-Host "Installing Vulkan SDK..."
-          Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait
-          
-          $vulkanPath = "C:\VulkanSDK\*"
-          $env:VULKAN_SDK = (Get-ChildItem $vulkanPath | Select-Object -First 1).FullName
-          
-          echo "VULKAN_SDK=$env:VULKAN_SDK" >> $env:GITHUB_ENV
-          echo "$env:VULKAN_SDK\Bin" >> $env:GITHUB_PATH
-          
-          Write-Host "Vulkan SDK installed at: $env:VULKAN_SDK"
+          $ErrorActionPreference = "Stop"
+
+          # Pin the SDK version so the installation path is predictable.
+          $ver = "1.4.313.2"
+          $installerPath = "$env:RUNNER_TEMP\VulkanSDK-Installer.exe"
+          $url = "https://sdk.lunarg.com/sdk/download/$ver/windows/vulkan-sdk.exe"
+
+          Write-Host "Downloading Vulkan SDK $ver..."
+          curl.exe -fL --retry 3 --retry-delay 5 -o $installerPath $url
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Vulkan SDK download failed with exit code $LASTEXITCODE"
+          }
+
+          Write-Host "Installing Vulkan SDK $ver..."
+          & $installerPath --accept-licenses --default-answer --confirm-command install
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Vulkan SDK installer failed with exit code $LASTEXITCODE"
+          }
+
+          $sdkPath = "C:\VulkanSDK\$ver"
+
+          if (-not (Test-Path "$sdkPath\Bin\glslc.exe")) {
+            throw "glslc.exe was not found at $sdkPath\Bin\glslc.exe"
+          }
+
+          "VULKAN_SDK=$sdkPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$sdkPath\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+          Write-Host "Vulkan SDK installed successfully at $sdkPath"
 
       - name: Configure CMake
         run: |
