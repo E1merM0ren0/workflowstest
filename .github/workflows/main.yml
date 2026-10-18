@@ -11,13 +11,18 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - name: Checkout Repository
+      - name: Checkout llama.cpp
         uses: actions/checkout@v4
         with:
-          repository: thecodacus/llama.cpp
+          # Original fork — keep this for the intended build
+          # repository: thecodacus/llama.cpp
+          # Test with upstream instead
+          repository: ggml-org/llama.cpp
+          ref: master
           path: llama.cpp
-          token: ${{ secrets.GITHUB_TOKEN }}
           submodules: recursive
+
+          
       - name: Setup Vulkan SDK
         shell: pwsh
         timeout-minutes: 20
