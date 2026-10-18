@@ -31,10 +31,13 @@ jobs:
           Write-Host "Installing Vulkan SDK..."
           Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait
           
-          # Add Vulkan SDK to PATH
+          # Find and set Vulkan SDK path
           $vulkanPath = "C:\VulkanSDK\*"
           $env:VULKAN_SDK = (Get-ChildItem $vulkanPath | Select-Object -First 1).FullName
-          $env:Path += ";$env:VULKAN_SDK\Bin"
+          
+          # Persist to GitHub Actions Environment
+          echo "VULKAN_SDK=$env:VULKAN_SDK" >> $env:GITHUB_ENV
+          echo "$env:VULKAN_SDK\Bin" >> $env:GITHUB_PATH
           
           Write-Host "Vulkan SDK installed at: $env:VULKAN_SDK"
 
@@ -108,21 +111,21 @@ jobs:
       - name: Display Build Summary
         run: |
           echo "## Build Summary 🚀" >> $GITHUB_STEP_SUMMARY
-          echo "### Successfully built llama.cpp with Vulkan support for Windows and Linux" >> $GITHUB_STEP_SUM
-          echo "" >> $GITHUB_STEP_SUM
-          echo "**Build Time:** $(date)" >> $GITHUB_STEP_SUM
-          echo "" >> $GITHUB_STEP_SUM
+          echo "### Successfully built llama.cpp with Vulkan support for Windows and Linux" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Time:** $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ -d "artifacts/llama-cpp-windows-vulkan" ]; then
-            echo "### Windows Build Artifacts:" >> $GITHUB_STEP_SUM
-            echo "```" >> $GITHUB_STEP_SUM
-            ls -la artifacts/llama-cpp-windows-vulkan >> $GITHUB_STEP_SUM
-            echo "```" >> $GITHUB_STEP_SUM
+            echo "### Windows Build Artifacts:" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            ls -la artifacts/llama-cpp-windows-vulkan >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
           fi
           
           if [ -d "artifacts/llama-cpp-linux-vulkan" ]; then
-            echo "### Linux Build Artifacts:" >> $GITHUB_STEP_SUM
-            echo "```" >> $GITHUB_STEP_SUM
-            ls -la artifacts/llama-cpp-linux-vulkan >> $GITHUB_STEP_SUM
-            echo "```" >> $GITHUB_STEP_SUM
+            echo "### Linux Build Artifacts:" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            ls -la artifacts/llama-cpp-linux-vulkan >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
           fi
