@@ -6,7 +6,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -16,12 +16,11 @@ jobs:
         with:
           repository: thecodacus/llama.cpp
           path: llama.cpp
-          token: ${{ secrets.GITHUB_TOKEN }} # If the repository is private
+          token: ${{ secrets.GITHUB_TOKEN }}
           submodules: recursive
 
       - name: Setup Vulkan SDK
         run: |
-          # Download and install Vulkan SDK
           $vulkanSdkUrl = "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe"
           $installerPath = "$env:TEMP\vulkan-sdk.exe"
           
@@ -31,11 +30,9 @@ jobs:
           Write-Host "Installing Vulkan SDK..."
           Start-Process -FilePath $installerPath -ArgumentList "/S" -Wait
           
-          # Find and set Vulkan SDK path
           $vulkanPath = "C:\VulkanSDK\*"
           $env:VULKAN_SDK = (Get-ChildItem $vulkanPath | Select-Object -First 1).FullName
           
-          # Persist to GitHub Actions Environment
           echo "VULKAN_SDK=$env:VULKAN_SDK" >> $env:GITHUB_ENV
           echo "$env:VULKAN_SDK\Bin" >> $env:GITHUB_PATH
           
@@ -68,7 +65,7 @@ jobs:
         with:
           repository: thecodacus/llama.cpp
           path: llama.cpp
-          token: ${{ secrets.GITHUB_TOKEN }} # If the repository is private
+          token: ${{ secrets.GITHUB_TOKEN }}
           submodules: recursive
 
       - name: Install Vulkan Dependencies
@@ -78,7 +75,8 @@ jobs:
             vulkan-tools \
             vulkan-validationlayers \
             spirv-tools \
-            libvulkan-dev
+            libvulkan-dev \
+            shaderc
 
       - name: Configure CMake
         run: |
