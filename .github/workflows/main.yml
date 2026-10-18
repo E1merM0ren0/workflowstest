@@ -68,6 +68,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           submodules: recursive
 
+   
       - name: Install Vulkan Dependencies
         run: |
           sudo apt-get update
@@ -76,7 +77,8 @@ jobs:
             vulkan-validationlayers \
             spirv-tools \
             libvulkan-dev \
-            shaderc
+            glslc
+
 
       - name: Configure CMake
         run: |
