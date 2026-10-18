@@ -87,6 +87,7 @@ jobs:
 #==========================================================================
 #==========================================================================
 #==========================================================================
+
   build-linux:
     runs-on: ubuntu-latest
     steps:
@@ -104,27 +105,47 @@ jobs:
           sudo apt-get install -y \
             build-essential \
             cmake \
+            ninja-build \
+            git \
+            libvulkan-dev \
             vulkan-tools \
             vulkan-validationlayers \
             spirv-tools \
             spirv-headers \
-            libvulkan-dev \
             glslc
 
+      - name: Locate SPIRV-Headers CMake Configuration
+        working-directory: llama.cpp
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SPIRV_HEADERS_CONFIG="$(dpkg -L spirv-headers \
+            | grep -m1 '/SPIRV-HeadersConfig.cmake$' || true)"
+
+          if [ -z "$SPIRV_HEADERS_CONFIG" ]; then
+            echo "::error::SPIRV-HeadersConfig.cmake was not found."
+            dpkg -L spirv-headers
+            exit 1
+          fi
+
+          SPIRV_HEADERS_DIR="$(dirname "$SPIRV_HEADERS_CONFIG")"
+          echo "SPIRV_HEADERS_DIR=$SPIRV_HEADERS_DIR" >> "$GITHUB_ENV"
+
+          echo "Found SPIRV-Headers at: $SPIRV_HEADERS_DIR"
 
       - name: Configure CMake
+        working-directory: llama.cpp
         run: |
-          cd llama.cpp
-          cmake -B build -S . \
-            -DGGML_VULKAN=ON \
+          cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DSPIRV-Headers_DIR=/usr/share/cmake/SPIRV-Headers
+            -DGGML_VULKAN=ON \
+            -DSPIRV-Headers_DIR="${SPIRV_HEADERS_DIR}"
 
-            
       - name: Build Project
+        working-directory: llama.cpp
         run: |
-          cd llama.cpp
-          cmake --build build --config Release --parallel 4
+          cmake --build build --parallel 4
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
