@@ -95,13 +95,16 @@ jobs:
             libvulkan-dev \
             glslc
 
+
       - name: Configure CMake
         run: |
           cd llama.cpp
           cmake -B build -S . \
             -DGGML_VULKAN=ON \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSPIRV-Headers_DIR=/usr/share/cmake/SPIRV-Headers
 
+            
       - name: Build Project
         run: |
           cd llama.cpp
