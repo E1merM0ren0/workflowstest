@@ -6,19 +6,18 @@ name: Build llama.cpp with Vulkan Support
 # Change the repository and ref here only.
 # ============================================================
 env:
-  LLAMA_CPP_REPOSITORY: thecodacus/llama.cpp
-  LLAMA_CPP_REF: perf
-
+  LLAMA_CPP_REPOSITORY: ggml-org/llama.cpp
+  LLAMA_CPP_REF: master
 on:
   workflow_dispatch:
   push:
     branches:
-      - perf
+      - main
     tags:
       - 'v*'
   pull_request:
     branches:
-      - perf
+      - main
 
 jobs:
 
