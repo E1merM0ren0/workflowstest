@@ -7,17 +7,17 @@ name: Build llama.cpp with Vulkan Support
 # ============================================================
 env:
   LLAMA_CPP_REPOSITORY: ggml-org/llama.cpp
-  LLAMA_CPP_REF: master
+  LLAMA_CPP_REF: feature/turboquant-kv-cache #master
 on:
   workflow_dispatch:
   push:
     branches:
-      - main
+      - feature/turboquant-kv-cache #main
     tags:
-      - 'v*'
+      - 'f*' #'v*'
   pull_request:
     branches:
-      - main
+      - feature/turboquant-kv-cache #main
 
 jobs:
 
