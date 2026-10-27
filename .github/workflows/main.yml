@@ -6,7 +6,7 @@ name: Build llama.cpp with Vulkan Support
 # Change the repository and ref here only.
 # ============================================================
 env:
-  LLAMA_CPP_REPOSITORY: TheTom/llama-cpp-turboquant #ggml-org/llama.cpp
+  LLAMA_CPP_REPOSITORY: ggml-org/llama.cpp #TheTom/llama-cpp-turboquant #
   LLAMA_CPP_REF:  master #feature/turboquant-kv-cache#
 on:
   workflow_dispatch:
