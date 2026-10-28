@@ -3,7 +3,7 @@ name: Build llama.cpp with Vulkan Support
 
 # ============================================================
 # SHARED DEFAULT CONFIGURATION
-# Used when "env" is selected in the dropdowns.
+# Change these defaults in one place.
 # ============================================================
 env:
   LLAMA_CPP_REPOSITORY: ggml-org/llama.cpp
@@ -13,30 +13,32 @@ on:
   workflow_dispatch:
     inputs:
       repository_source:
-        description: "Choose the repository to build"
+        description: "Choose one repository or build all repositories"
         type: choice
         options:
+          - all
           - env
           - ggml-org/llama.cpp
           - thecodacus/llama.cpp
           - TheTom/llama-cpp-turboquant
           - manual
-        default: env
+        default: all
         required: true
 
       repository:
-        description: "Manual repository (owner/repository)"
+        description: "Manual repository (owner/repository), used with manual"
         type: string
         default: ""
         required: false
 
       ref_source:
-        description: "Choose the branch/ref source"
+        description: "Choose how to select the branch/ref"
         type: choice
         options:
+          - default
           - env
           - manual
-        default: env
+        default: default
         required: true
 
       ref:
@@ -55,72 +57,159 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
 
   # ============================================================
-  # WINDOWS BUILD
+  # RESOLVE REPOSITORIES
+  # Selects repositories, refs, and artifact filename slugs.
   # ============================================================
-  build-windows:
-    name: Build Windows Vulkan
-    runs-on: windows-latest
+  resolve:
+    name: Resolve Build Configuration
+    runs-on: ubuntu-latest
+
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
 
     steps:
-      - name: Resolve Build Configuration
+      - name: Resolve Repository Matrix
+        id: resolve
         shell: bash
+        env:
+          REPOSITORY_SOURCE: ${{ inputs.repository_source || 'all' }}
+          MANUAL_REPOSITORY: ${{ inputs.repository }}
+          REF_SOURCE: ${{ inputs.ref_source || 'default' }}
+          MANUAL_REF: ${{ inputs.ref }}
+          DEFAULT_REPOSITORY: ${{ env.LLAMA_CPP_REPOSITORY }}
+          DEFAULT_REF: ${{ env.LLAMA_CPP_REF }}
         run: |
           set -euo pipefail
 
-          REPOSITORY_SOURCE="${{ inputs.repository_source }}"
-          MANUAL_REPOSITORY="${{ inputs.repository }}"
-          REF_SOURCE="${{ inputs.ref_source }}"
-          MANUAL_REF="${{ inputs.ref }}"
+          declare -a repositories=()
 
           case "$REPOSITORY_SOURCE" in
+            all)
+              repositories=(
+                "$DEFAULT_REPOSITORY"
+                "thecodacus/llama.cpp"
+                "TheTom/llama-cpp-turboquant"
+              )
+              ;;
             env)
-              REPOSITORY="${{ env.LLAMA_CPP_REPOSITORY }}"
+              repositories=("$DEFAULT_REPOSITORY")
               ;;
             manual)
-              REPOSITORY="$MANUAL_REPOSITORY"
+              if [[ -z "$MANUAL_REPOSITORY" ]]; then
+                echo "::error::Enter a repository when selecting manual."
+                exit 1
+              fi
+              repositories=("$MANUAL_REPOSITORY")
+              ;;
+            ggml-org/llama.cpp|thecodacus/llama.cpp|TheTom/llama-cpp-turboquant)
+              repositories=("$REPOSITORY_SOURCE")
               ;;
             *)
-              REPOSITORY="$REPOSITORY_SOURCE"
+              echo "::error::Unknown repository selection."
+              exit 1
               ;;
           esac
 
-          if [ -z "$REPOSITORY" ]; then
-            echo "::error::Repository cannot be empty."
+          # Remove duplicate repository entries.
+          declare -A seen=()
+          unique_repositories=()
+
+          for repo in "${repositories[@]}"; do
+            if [[ ! "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+              echo "::error::Invalid repository format: $repo"
+              exit 1
+            fi
+
+            if [[ -z "${seen[$repo]+x}" ]]; then
+              seen["$repo"]=1
+              unique_repositories+=("$repo")
+            fi
+          done
+
+          # Build the matrix JSON. When ref_source=default,
+          # discover each repository's own default branch.
+          matrix='[]'
+
+          for repo in "${unique_repositories[@]}"; do
+            case "$REF_SOURCE" in
+              env)
+                branch="$DEFAULT_REF"
+                ;;
+              manual)
+                if [[ -z "$MANUAL_REF" ]]; then
+                  echo "::error::Enter a ref when selecting manual."
+                  exit 1
+                fi
+                branch="$MANUAL_REF"
+                ;;
+              default)
+                branch="$(curl -fsSL \
+                  --retry 3 \
+                  "https://api.github.com/repos/$repo" \
+                  | jq -er '.default_branch')" || {
+                    echo "::error::Could not determine the default branch for $repo"
+                    exit 1
+                  }
+                ;;
+              *)
+                echo "::error::Unknown ref selection."
+                exit 1
+                ;;
+            esac
+
+            # Produce a filesystem-friendly repository identifier.
+            slug="$(printf '%s' "$repo" \
+              | tr '[:upper:]' '[:lower:]' \
+              | sed 's/[^a-z0-9-]/-/g; s/-\+/-/g; s/^-//; s/-$//')"
+
+            entry="$(jq -cn \
+              --arg repository "$repo" \
+              --arg ref "$branch" \
+              --arg slug "$slug" \
+              '{repository:$repository, ref:$ref, slug:$slug}')"
+
+            matrix="$(jq -cn \
+              --argjson current "$matrix" \
+              --argjson entry "$entry" \
+              '$current + [$entry]')"
+
+            echo "Selected: $repo @ $branch"
+          done
+
+          if [[ "$matrix" == "[]" ]]; then
+            echo "::error::No repositories were selected."
             exit 1
           fi
 
-          if [[ ! "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-            echo "::error::Repository must be in owner/repository format."
-            exit 1
-          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "Build matrix: $matrix"
 
-          if [ "$REF_SOURCE" = "manual" ]; then
-            REF="$MANUAL_REF"
-          else
-            REF="${{ env.LLAMA_CPP_REF }}"
-          fi
+  # ============================================================
+  # WINDOWS BUILD
+  # Builds every selected repository on Windows.
+  # ============================================================
+  build-windows:
+    name: Windows Vulkan - ${{ matrix.slug }}
+    runs-on: windows-latest
+    needs: resolve
 
-          if [ -z "$REF" ]; then
-            echo "::error::Ref cannot be empty."
-            exit 1
-          fi
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
 
-          {
-            echo "LLAMA_CPP_REPOSITORY=$REPOSITORY"
-            echo "LLAMA_CPP_REF=$REF"
-          } >> "$GITHUB_ENV"
-
-          echo "Selected repository: $REPOSITORY"
-          echo "Selected ref: $REF"
-
+    steps:
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.LLAMA_CPP_REPOSITORY }}
-          ref: ${{ env.LLAMA_CPP_REF }}
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.ref }}
           path: llama.cpp
           submodules: recursive
 
@@ -157,8 +246,6 @@ jobs:
           "VULKAN_SDK=$sdkPath" | Out-File -FilePath $env:GITHUB_ENV -Append
           "$sdkPath\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
-          Write-Host "Vulkan SDK installed successfully at $sdkPath"
-
       - name: Configure CMake
         shell: pwsh
         run: |
@@ -194,7 +281,6 @@ jobs:
 
           $stageDir = "windows-release-stage"
           New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
-
           $rootPath = (Resolve-Path $buildDir).Path
 
           foreach ($file in $files) {
@@ -209,83 +295,41 @@ jobs:
             Copy-Item $file.FullName $destination -Force
           }
 
+          $archive = "llama-cpp-${{ matrix.slug }}-windows-vulkan.zip"
+
           Compress-Archive `
             -Path "$stageDir\*" `
-            -DestinationPath "llama-cpp-windows-vulkan.zip" `
+            -DestinationPath $archive `
             -Force
 
-      - name: Upload Windows Release Package
+      - name: Upload Windows Package
         uses: actions/upload-artifact@v4
         with:
-          name: llama-cpp-windows-vulkan
-          path: llama-cpp-windows-vulkan.zip
+          name: llama-cpp-${{ matrix.slug }}-windows-vulkan
+          path: llama-cpp-${{ matrix.slug }}-windows-vulkan.zip
           if-no-files-found: error
           retention-days: 7
 
   # ============================================================
   # LINUX BUILD
+  # Builds every selected repository on Linux.
   # ============================================================
   build-linux:
-    name: Build Linux Vulkan
+    name: Linux Vulkan - ${{ matrix.slug }}
     runs-on: ubuntu-latest
+    needs: resolve
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.resolve.outputs.matrix) }}
 
     steps:
-      - name: Resolve Build Configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          REPOSITORY_SOURCE="${{ inputs.repository_source }}"
-          MANUAL_REPOSITORY="${{ inputs.repository }}"
-          REF_SOURCE="${{ inputs.ref_source }}"
-          MANUAL_REF="${{ inputs.ref }}"
-
-          case "$REPOSITORY_SOURCE" in
-            env)
-              REPOSITORY="${{ env.LLAMA_CPP_REPOSITORY }}"
-              ;;
-            manual)
-              REPOSITORY="$MANUAL_REPOSITORY"
-              ;;
-            *)
-              REPOSITORY="$REPOSITORY_SOURCE"
-              ;;
-          esac
-
-          if [ -z "$REPOSITORY" ]; then
-            echo "::error::Repository cannot be empty."
-            exit 1
-          fi
-
-          if [[ ! "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-            echo "::error::Repository must be in owner/repository format."
-            exit 1
-          fi
-
-          if [ "$REF_SOURCE" = "manual" ]; then
-            REF="$MANUAL_REF"
-          else
-            REF="${{ env.LLAMA_CPP_REF }}"
-          fi
-
-          if [ -z "$REF" ]; then
-            echo "::error::Ref cannot be empty."
-            exit 1
-          fi
-
-          {
-            echo "LLAMA_CPP_REPOSITORY=$REPOSITORY"
-            echo "LLAMA_CPP_REF=$REF"
-          } >> "$GITHUB_ENV"
-
-          echo "Selected repository: $REPOSITORY"
-          echo "Selected ref: $REF"
-
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.LLAMA_CPP_REPOSITORY }}
-          ref: ${{ env.LLAMA_CPP_REF }}
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.ref }}
           path: llama.cpp
           submodules: recursive
 
@@ -322,8 +366,6 @@ jobs:
           SPIRV_HEADERS_DIR="$(dirname "$SPIRV_HEADERS_CONFIG")"
           echo "SPIRV_HEADERS_DIR=$SPIRV_HEADERS_DIR" >> "$GITHUB_ENV"
 
-          echo "Found SPIRV-Headers at: $SPIRV_HEADERS_DIR"
-
       - name: Configure CMake
         working-directory: llama.cpp
         run: |
@@ -357,19 +399,21 @@ jobs:
             exit 1
           fi
 
-          tar -czf llama-cpp-linux-vulkan.tar.gz -C release-stage .
+          archive="llama-cpp-${{ matrix.slug }}-linux-vulkan.tar.gz"
+          tar -czf "$archive" -C release-stage .
 
-      - name: Upload Linux Release Package
+      - name: Upload Linux Package
         uses: actions/upload-artifact@v4
         with:
-          name: llama-cpp-linux-vulkan
-          path: llama-cpp-linux-vulkan.tar.gz
+          name: llama-cpp-${{ matrix.slug }}-linux-vulkan
+          path: llama-cpp-${{ matrix.slug }}-linux-vulkan.tar.gz
           if-no-files-found: error
           retention-days: 7
 
   # ============================================================
   # GITHUB RELEASE
-  # Runs only when a v* tag is pushed.
+  # Publishes every successfully built repository/platform package
+  # when a version tag (v*) is pushed.
   # ============================================================
   publish-release:
     name: Publish GitHub Release
@@ -399,5 +443,4 @@ jobs:
           name: llama.cpp Vulkan Build ${{ github.ref_name }}
           generate_release_notes: true
           files: |
-            release-assets/llama-cpp-linux-vulkan.tar.gz
-            release-assets/llama-cpp-windows-vulkan.zip
+            release-assets/*
