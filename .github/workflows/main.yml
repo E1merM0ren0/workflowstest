@@ -2,22 +2,58 @@
 name: Build llama.cpp with Vulkan Support
 
 # ============================================================
-# Shared configuration
-# Change the repository and ref here only.
+# SHARED DEFAULT CONFIGURATION
+# Used when "env" is selected in the dropdowns.
 # ============================================================
 env:
-  LLAMA_CPP_REPOSITORY: ggml-org/llama.cpp #TheTom/llama-cpp-turboquant #
-  LLAMA_CPP_REF:  master #feature/turboquant-kv-cache#
+  LLAMA_CPP_REPOSITORY: ggml-org/llama.cpp
+  LLAMA_CPP_REF: master
+
 on:
   workflow_dispatch:
+    inputs:
+      repository_source:
+        description: "Choose the repository to build"
+        type: choice
+        options:
+          - env
+          - ggml-org/llama.cpp
+          - thecodacus/llama.cpp
+          - TheTom/llama-cpp-turboquant
+          - manual
+        default: env
+        required: true
+
+      repository:
+        description: "Manual repository (owner/repository)"
+        type: string
+        default: ""
+        required: false
+
+      ref_source:
+        description: "Choose the branch/ref source"
+        type: choice
+        options:
+          - env
+          - manual
+        default: env
+        required: true
+
+      ref:
+        description: "Manual branch, tag, or commit SHA"
+        type: string
+        default: ""
+        required: false
+
   push:
     branches:
-      - main  #feature/turboquant-kv-cache#
+      - main
     tags:
-      - 'v*'  #f
+      - 'v*'
+
   pull_request:
     branches:
-      -  main #feature/turboquant-kv-cache #
+      - main
 
 jobs:
 
@@ -29,6 +65,57 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      - name: Resolve Build Configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REPOSITORY_SOURCE="${{ inputs.repository_source }}"
+          MANUAL_REPOSITORY="${{ inputs.repository }}"
+          REF_SOURCE="${{ inputs.ref_source }}"
+          MANUAL_REF="${{ inputs.ref }}"
+
+          case "$REPOSITORY_SOURCE" in
+            env)
+              REPOSITORY="${{ env.LLAMA_CPP_REPOSITORY }}"
+              ;;
+            manual)
+              REPOSITORY="$MANUAL_REPOSITORY"
+              ;;
+            *)
+              REPOSITORY="$REPOSITORY_SOURCE"
+              ;;
+          esac
+
+          if [ -z "$REPOSITORY" ]; then
+            echo "::error::Repository cannot be empty."
+            exit 1
+          fi
+
+          if [[ ! "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::Repository must be in owner/repository format."
+            exit 1
+          fi
+
+          if [ "$REF_SOURCE" = "manual" ]; then
+            REF="$MANUAL_REF"
+          else
+            REF="${{ env.LLAMA_CPP_REF }}"
+          fi
+
+          if [ -z "$REF" ]; then
+            echo "::error::Ref cannot be empty."
+            exit 1
+          fi
+
+          {
+            echo "LLAMA_CPP_REPOSITORY=$REPOSITORY"
+            echo "LLAMA_CPP_REF=$REF"
+          } >> "$GITHUB_ENV"
+
+          echo "Selected repository: $REPOSITORY"
+          echo "Selected ref: $REF"
+
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
         with:
@@ -90,7 +177,6 @@ jobs:
 
           $buildDir = "llama.cpp/build/bin/Release"
 
-          # Some CMake generators place binaries directly in build/bin.
           if (-not (Test-Path $buildDir)) {
             $buildDir = "llama.cpp/build/bin"
           }
@@ -109,9 +195,11 @@ jobs:
           $stageDir = "windows-release-stage"
           New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
 
+          $rootPath = (Resolve-Path $buildDir).Path
+
           foreach ($file in $files) {
             $relativePath = $file.FullName.Substring(
-              (Resolve-Path $buildDir).Path.Length
+              $rootPath.Length
             ).TrimStart('\', '/')
 
             $destination = Join-Path $stageDir $relativePath
@@ -142,6 +230,57 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Resolve Build Configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          REPOSITORY_SOURCE="${{ inputs.repository_source }}"
+          MANUAL_REPOSITORY="${{ inputs.repository }}"
+          REF_SOURCE="${{ inputs.ref_source }}"
+          MANUAL_REF="${{ inputs.ref }}"
+
+          case "$REPOSITORY_SOURCE" in
+            env)
+              REPOSITORY="${{ env.LLAMA_CPP_REPOSITORY }}"
+              ;;
+            manual)
+              REPOSITORY="$MANUAL_REPOSITORY"
+              ;;
+            *)
+              REPOSITORY="$REPOSITORY_SOURCE"
+              ;;
+          esac
+
+          if [ -z "$REPOSITORY" ]; then
+            echo "::error::Repository cannot be empty."
+            exit 1
+          fi
+
+          if [[ ! "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::Repository must be in owner/repository format."
+            exit 1
+          fi
+
+          if [ "$REF_SOURCE" = "manual" ]; then
+            REF="$MANUAL_REF"
+          else
+            REF="${{ env.LLAMA_CPP_REF }}"
+          fi
+
+          if [ -z "$REF" ]; then
+            echo "::error::Ref cannot be empty."
+            exit 1
+          fi
+
+          {
+            echo "LLAMA_CPP_REPOSITORY=$REPOSITORY"
+            echo "LLAMA_CPP_REF=$REF"
+          } >> "$GITHUB_ENV"
+
+          echo "Selected repository: $REPOSITORY"
+          echo "Selected ref: $REF"
+
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
         with:
@@ -230,7 +369,7 @@ jobs:
 
   # ============================================================
   # GITHUB RELEASE
-  # Runs only when a version tag (v*) is pushed.
+  # Runs only when a v* tag is pushed.
   # ============================================================
   publish-release:
     name: Publish GitHub Release
